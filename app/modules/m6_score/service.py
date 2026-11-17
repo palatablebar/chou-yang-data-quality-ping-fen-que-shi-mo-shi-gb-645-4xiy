@@ -154,6 +154,11 @@ def run(settings: config.Settings, store, *, name: str | None = None,
                       encoding=ingest["encoding"],
                       declared_encoding=ingest["declared_encoding"],
                       data=ingest["raw"], stamp=started_at)
+    # 按 run_id 留一份不可变原文：同名数据集换版后，旧运行仍能按自身输入复核
+    store.save_run_artifact(run_id=run_id, name=ingest["name"],
+                            digest=ingest["digest"], encoding=ingest["encoding"],
+                            declared_encoding=ingest["declared_encoding"],
+                            data=ingest["raw"], stamp=started_at)
     runstore.persist(store, result)
     return result
 

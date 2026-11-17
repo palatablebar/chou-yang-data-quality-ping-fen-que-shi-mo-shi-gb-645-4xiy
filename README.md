@@ -7,6 +7,7 @@
 - 一个 FastAPI 服务、Jinja2 模板、原生 HTML/CSS/JS、SQLite 存数据集与运行记录
 - 端口 `18204`（容器内 `8000`）
 - 规则唯一来源：`app/config.py`（权重、容忍度、刻度、阈值）；原因码唯一来源：`app/reasons.py`
+- 换样本后的总分变化可裁决：反事实分解把 Δ分 精确拆成字段质量效应与样本覆盖效应，残差恒 0.00
 
 ## 能力
 
@@ -19,6 +20,7 @@
 | 稳健离群 | 中位数 + MAD 稳健 z，MAD=0 回退 IQR/1.349，离散度低于刻度下限判退化 |
 | 评分 | 100 − 缺失 30 − 重复 25 − 离群 20 − 格式 25，每维按容忍度封顶，Decimal 计分 |
 | 批次与导出 | run_id、输入 sha256、版本自增、同输入幂等复用、陈旧提交 409、六种 CSV + 清单 JSON |
+| 批次对比 | 工单号配对共有/移除/新增，反事实批望远镜分解 Δ扣分 = 字段质量效应 + 样本覆盖效应，残差恒 0.00，同对批次幂等 |
 
 ## 功能模块
 
@@ -31,6 +33,7 @@
 | M5 稳健离群 | `GET /api/outliers`、页面 `/outliers` | `app/modules/m5_outliers/robust.py`、`zscore.py`、`flags.py` | `tests/test_m5_outliers.py` |
 | M6 评分与批次 | `POST /api/score`、`GET /api/batches`、`GET /api/reconcile`、页面 `/batches` | `app/modules/m6_score/score.py`、`grade.py`、`runstore.py`、`service.py` | `tests/test_m6_score.py` |
 | M7 报告导出 | `GET /`、`GET /api/export/*` | `app/modules/m7_export/report.py`、`csv_out.py`、`manifest_out.py` | `tests/test_m7_export.py` |
+| M8 批次对比 | `POST /api/comparisons`、`GET /api/comparisons`、页面 `/compare`、对比 CSV/JSON 导出 | `app/modules/m8_compare/matching.py`、`subset.py`、`decompose.py`、`service.py` | `tests/test_m8_compare.py` |
 
 ## 核心规则
 
@@ -45,6 +48,10 @@
    总分 = 100 − 扣分之和，恒在 [0, 100]，`总分 + 扣分之和 = 100` 逐位成立。
 5. **幂等与版本**：同名数据集按内容 sha256 + 规则版本 + 阈值摘要识别，
    同输入重跑返回同一运行记录；客户端版本落后于库里版本时返回 409。
+6. **变化裁决（M8）**：按工单号把两批采纳行分成共有/仅旧批/仅新批，另建反事实批
+   X0 = 新质量共有行 + 旧批移除行。扣分空间望远镜分解：字段质量效应 = P_X0 − P_S0、
+   样本覆盖效应 = P_S1 − P_X0，Δ扣分 = 两效应之和、残差恒 0.00；同一对 run
+   （无序对 + 规则版本）重复对比返回同一条记录，不新增版本。
 
 ## 启动
 
@@ -64,6 +71,8 @@ open http://127.0.0.1:18204/
 4. `/outliers` 看 `first_response_min` 的极端值与 `satisfaction` 的退化标记。
 5. `/batches` 看版本、阈值与五项对账；再点「重跑」验证幂等复用。
 6. 任一页面底部导出 CSV，或直接 `curl /api/export/manifest.json` 取运行清单。
+7. 采信两批工单后到 `/compare` 选两条运行生成对比：看字段质量效应、样本覆盖效应、
+   反事实批与新增高缺失旗标；重复点提交验证同对批次不新增记录。
 
 ## API 与页面
 
@@ -82,8 +91,11 @@ open http://127.0.0.1:18204/
 | POST | `/api/score` | 跑一次评分（可带 `expected_version`） |
 | GET | `/api/batches` | 运行历史 |
 | GET | `/api/reconcile` | 五项对账 |
+| POST | `/api/comparisons` | 两批运行对比裁决（`base_run_id` + `target_run_id`，方向自动规范） |
+| GET | `/api/comparisons`、`/api/comparisons/{id}` | 对比历史与单条快照 |
+| GET | `/api/export/comparison.csv` / `.json` | 对比裁决导出（与 `/compare` 页面同快照同口径） |
 | GET | `/api/export/report.csv` 等 | 六种 CSV + `manifest.json` |
-| GET | `/`、`/profile`、`/missing`、`/duplicates`、`/outliers`、`/batches` | 六个页面 |
+| GET | `/`、`/profile`、`/missing`、`/duplicates`、`/outliers`、`/batches`、`/compare` | 七个页面 |
 
 ## 目录
 
@@ -91,11 +103,12 @@ open http://127.0.0.1:18204/
 app/
   main.py config.py errors.py reasons.py manifest.py store.py web.py
   modules/m1_ingest … m7_export/   每个模块 handler + service + 3 个规则/读写文件
-  templates/  base.html + 6 页
-  static/     theme.css layout.css components.css app.js table.js charts.js
+  modules/m8_compare/             配对 matching、子集重评 subset、反事实分解 decompose
+  templates/  base.html + 7 页
+  static/     theme.css layout.css components.css app.js table.js charts.js compare.js
 docs/         DEPTH.md DATA-DICTIONARY.md RUNBOOK.md
 sample_data/  9 个 CSV（脏、干净、GB18030、BOM、截断、常量列、仅表头、空行、空文件）
-tests/        conftest.py + 7 个模块测试 + e2e + invariants + fixtures
+tests/        conftest.py + 8 个模块测试 + e2e + invariants + fixtures
 ```
 
 ## 定义与已覆盖

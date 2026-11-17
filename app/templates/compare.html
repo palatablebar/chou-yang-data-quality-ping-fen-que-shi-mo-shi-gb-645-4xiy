@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block body %}
+<h1 class="title">批次对比 · 变化裁决</h1>
+
+<section class="block block--form">
+  <h2 class="block__title">选择两批运行</h2>
+  {% if runs|length >= 2 %}
+  <form id="compare-form" class="form">
+    <label class="field">
+      <span class="field__label">旧批（base）</span>
+      <select class="field__input" name="base_run_id" id="base-run">
+        {% for item in runs %}
+        <option value="{{ item.run_id }}">{{ item.run_id }} · v{{ item.version }} · {{ item.name }} · {{ item.score }}分</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field__label">新批（target）</span>
+      <select class="field__input" name="target_run_id" id="target-run">
+        {% for item in runs %}
+        <option value="{{ item.run_id }}">{{ item.run_id }} · v{{ item.version }} · {{ item.name }} · {{ item.score }}分</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="actions">
+      <button class="btn btn--primary" type="submit" id="compare-btn">生成对比裁决</button>
+    </div>
+  </form>
+  <p class="status" id="compare-status" role="status" aria-live="polite"></p>
+  <p class="aside">方向会自动规范为「版本旧 → 版本新」；同一对批次重复提交返回同一条记录，不新增版本、不重复累计。</p>
+  {% else %}
+  <p class="empty">至少需要两条运行记录才能对比，请先在报告页采信并评分两批工单。</p>
+  {% endif %}
+</section>
+
+{% if comparison %}
+{% set c = comparison.comparison %}
+{% set e = c.effects %}
+<section class="block">
+  <h2 class="block__title">裁决结论<span class="block__hint mono">{{ comparison.comparison_id }}</span></h2>
+  <section class="verdict">
+    <div class="verdict__score">
+      <span class="verdict__value">{{ e.score_delta }}</span>
+      <span class="verdict__unit">分（新−旧）</span>
+    </div>
+    <div class="verdict__side">
+      <span class="tag">{{ e.verdict_label }} · {{ e.verdict_code }}</span>
+      <span class="verdict__dataset">{{ comparison.base.name }} v{{ comparison.base.version }} → {{ comparison.target.name }} v{{ comparison.target.version }}</span>
+      <span class="verdict__digest">{% if comparison.reversed_input %}入参顺序已规范（旧批/新批自动归位）{% else %}方向：旧批 → 新批{% endif %}</span>
+    </div>
+  </section>
+  <table class="ledger">
+    <thead>
+      <tr><th>效应（扣分口径）</th><th class="num">扣分变化</th><th class="num">对总分影响</th><th>含义</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>字段质量效应</td>
+        <td class="num">{{ e.quality_effect if e.quality_effect is not none else "—" }}</td>
+        <td class="num">{{ e.quality_score_effect if e.quality_score_effect is not none else "—" }}</td>
+        <td>同一批共有工单，字段质量变化带来的扣分差</td>
+      </tr>
+      <tr>
+        <td>样本覆盖效应</td>
+        <td class="num">{{ e.coverage_effect if e.coverage_effect is not none else "—" }}</td>
+        <td class="num">{{ e.coverage_score_effect if e.coverage_score_effect is not none else "—" }}</td>
+        <td>换样本：新增工单相对移除工单的扣分拖累</td>
+      </tr>
+      <tr>
+        <td>分解残差</td>
+        <td class="num">{{ e.closure_residual if e.closure_residual is not none else "—" }}</td>
+        <td class="num">—</td>
+        <td>Δ扣分 − 两效应之和，恒为 0.00</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="aside">{{ c.formula }}</p>
+</section>
+
+<section class="block">
+  <h2 class="block__title">样本配对</h2>
+  <ul class="pairs pairs--two">
+    <li class="pair"><span class="pair__key">共有工单数</span><span class="pair__value num">{{ c.overlap.common_tickets|intf }}</span></li>
+    <li class="pair"><span class="pair__key">共有行（旧/新）</span><span class="pair__value num">{{ c.overlap.base_common_rows|intf }} / {{ c.overlap.target_common_rows|intf }}</span></li>
+    <li class="pair"><span class="pair__key">移除行（仅旧批）</span><span class="pair__value num">{{ c.overlap.base_only_rows|intf }}</span></li>
+    <li class="pair"><span class="pair__key">新增行（仅新批）</span><span class="pair__value num">{{ c.overlap.target_only_rows|intf }}</span></li>
+    <li class="pair"><span class="pair__key">无键行（旧/新）</span><span class="pair__value num">{{ c.overlap.base_unkeyed_rows|intf }} / {{ c.overlap.target_unkeyed_rows|intf }}</span></li>
+    <li class="pair"><span class="pair__key">采纳行（旧/新）</span><span class="pair__value num">{{ c.overlap.base_accepted_rows|intf }} / {{ c.overlap.target_accepted_rows|intf }}</span></li>
+  </ul>
+  {% if c.added_risk.flagged %}
+  <p class="status status--bad">⚠ 新增高缺失工单：新增桶缺失率 {{ c.added_risk.added_missing_rate|pct }}，高于共有桶 {{ c.added_risk.gap|pct }}（阈值 {{ c.added_risk.threshold|pct }}），原因码 {{ c.added_risk.code }}</p>
+  {% else %}
+  <p class="aside">新增桶缺失率 {{ c.added_risk.added_missing_rate|pct }}，共有桶 {{ c.added_risk.common_missing_rate|pct if c.added_risk.common_missing_rate is not none else "—" }}，未触发高缺失旗标。</p>
+  {% endif %}
+</section>
+
+<section class="block">
+  <h2 class="block__title">六组重评（同一评分引擎，刻度 0.01）</h2>
+  <table class="ledger ledger--wide" data-sortable>
+    <thead>
+      <tr><th>视图</th><th class="num">采纳行</th><th class="num">总分</th><th class="num">扣分合计</th>
+          <th class="num">缺失格</th><th class="num">缺失率</th><th class="num">格式不合格</th>
+          <th class="num">重复行</th><th class="num">离群格</th></tr>
+    </thead>
+    <tbody>
+      {% for key, label in [("base_full","旧批整批"),("counterfactual","反事实批（新质量共有＋移除）"),("target_full","新批整批"),("base_common","共有工单·旧批"),("target_common","共有工单·新批"),("base_only","仅旧批（移除）"),("target_only","仅新批（新增）")] %}
+      {% set v = c.views[key] %}
+      <tr>
+        <td>{{ label }}</td>
+        {% if v %}
+        <td class="num">{{ v.rows|intf }}</td>
+        <td class="num">{{ v.score }}</td>
+        <td class="num">{{ v.penalty_sum }}</td>
+        <td class="num">{{ v.cells_missing|intf }}</td>
+        <td class="num">{{ v.missing_rate|pct }}</td>
+        <td class="num">{{ v.format_bad|intf }}</td>
+        <td class="num">{{ v.rows_dup|intf }}</td>
+        <td class="num">{{ v.outlier_cells|intf }}</td>
+        {% else %}
+        <td class="num" colspan="8">不适用（无共有工单）</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="block">
+  <h2 class="block__title">效应逐维分解<span class="block__hint">扣分差，正值=恶化</span></h2>
+  <table class="ledger" data-sortable>
+    <thead>
+      <tr><th>维度</th><th class="num">旧批扣分</th><th class="num">反事实批扣分</th>
+          <th class="num">字段质量效应</th><th class="num">新批扣分</th>
+          <th class="num">样本覆盖效应</th></tr>
+    </thead>
+    <tbody>
+      {% for q in c.quality_dims %}
+      {% set cov = c.coverage_dims[loop.index0] %}
+      <tr>
+        <td>{{ q.label }}</td>
+        <td class="num">{{ q.left_penalty if q.left_penalty is not none else "—" }}</td>
+        <td class="num">{{ q.right_penalty if q.right_penalty is not none else "—" }}</td>
+        <td class="num">{{ q.effect if q.effect is not none else "—" }}</td>
+        <td class="num">{{ cov.right_penalty if cov.right_penalty is not none else "—" }}</td>
+        <td class="num">{{ cov.effect if cov.effect is not none else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="block">
+  <h2 class="block__title">导出<span class="block__hint">与本页同一条对比快照</span></h2>
+  <p class="links">
+    <a class="link" href="/api/export/comparison.csv?comparison_id={{ comparison.comparison_id }}">对比裁决 CSV</a>
+    <a class="link" href="/api/export/comparison.json?comparison_id={{ comparison.comparison_id }}">对比快照 JSON</a>
+  </p>
+</section>
+{% else %}
+<p class="empty">还没有对比记录。</p>
+{% endif %}
+
+{% if history %}
+<section class="block">
+  <h2 class="block__title">历史对比</h2>
+  <table class="ledger ledger--wide" data-sortable>
+    <thead>
+      <tr><th>对比编号</th><th>旧批</th><th>新批</th><th class="num">总分变化</th>
+          <th class="num">字段质量</th><th class="num">样本覆盖</th><th>裁决</th><th>时间</th></tr>
+    </thead>
+    <tbody>
+      {% for item in history %}
+      <tr>
+        <td class="mono"><a class="link" href="/compare?comparison_id={{ item.comparison_id }}">{{ item.comparison_id }}</a></td>
+        <td>{{ item.base.name }} v{{ item.base.version }}</td>
+        <td>{{ item.target.name }} v{{ item.target.version }}</td>
+        <td class="num">{{ item.comparison.effects.score_delta }}</td>
+        <td class="num">{{ item.comparison.effects.quality_effect if item.comparison.effects.quality_effect is not none else "—" }}</td>
+        <td class="num">{{ item.comparison.effects.coverage_effect if item.comparison.effects.coverage_effect is not none else "—" }}</td>
+        <td><span class="tag">{{ item.comparison.effects.verdict_label }}</span></td>
+        <td class="mono">{{ item.created_at|localdt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script src="/static/compare.js" defer></script>
+{% endblock %}

@@ -1,6 +1,6 @@
 # 深度登记 qualiscore（抽样数据质量评分与缺失模式）
 
-- 规模：中型（7 个功能模块 / 6 个应用页 / 97 条测试）
+- 规模：中型（8 个功能模块 / 7 个应用页 / 120 条测试）
 - 核心规则：**MAD 稳健 z + 退化回退 + 封顶加权评分**。逐格先判三态（缺失 / 格式不合格 / 有值），
   再按列算中位数与 MAD；`z = 0.6745 × (x − 中位数) / MAD`，MAD=0 时回退 `spread = 0.6745 × IQR / 1.349`，
   离散度低于「列刻度 × 5」或 MAD 与 IQR 同为 0 判退化；评分 = 100 − 缺失 30 − 重复 25 − 离群 20 − 格式 25，
@@ -19,6 +19,7 @@
 | M5 稳健离群 | 看逐列中位数、MAD、回退方法与离群格 | GET /api/outliers、页面 /outliers | `app/modules/m5_outliers/robust.py` `app/modules/m5_outliers/zscore.py` `app/modules/m5_outliers/flags.py` `app/modules/m5_outliers/service.py` | `tests/test_m5_outliers.py` |
 | M6 评分与批次 | 跑一次评分、查运行历史、看五项对账、重跑 | POST /api/score、GET /api/batches、GET /api/reconcile、页面 /batches | `app/modules/m6_score/score.py` `app/modules/m6_score/grade.py` `app/modules/m6_score/runstore.py` `app/modules/m6_score/service.py` | `tests/test_m6_score.py` |
 | M7 报告导出 | 看报告页、导出六种 CSV 与运行清单 | GET /、GET /api/export/* | `app/modules/m7_export/report.py` `app/modules/m7_export/csv_out.py` `app/modules/m7_export/manifest_out.py` `app/modules/m7_export/service.py` | `tests/test_m7_export.py` |
+| M8 批次对比 | 选两批运行，看总分变化的字段质量/样本覆盖裁决、反事实批、新增高缺失旗标 | POST /api/comparisons、GET /api/comparisons、页面 /compare、GET /api/export/comparison.csv\|.json | `app/modules/m8_compare/matching.py` `app/modules/m8_compare/subset.py` `app/modules/m8_compare/decompose.py` `app/modules/m8_compare/service.py` `app/modules/m8_compare/export_out.py` | `tests/test_m8_compare.py` |
 
 端到端：`tests/test_e2e.py`（HTTP 走完采信 → 评分 → 六页 200 → 八种导出；含上传、失败输入、陈旧版本 409）。
 不变量：`tests/test_invariants.py`（行分区、单元格分区、分数闭合、幂等重跑、重复分区、顺序无关、缺失扣分单调）。
@@ -38,6 +39,9 @@
 | TRAP-19 | 一个单元格同时像缺失、越界、离群 | 按代码顺序覆盖，分项之和大于总分 | 固定优先级缺失 > 格式不合格 > 离群，一格只进一个桶 | `app/modules/m5_outliers/flags.py`、`app/modules/m2_profile/formats.py` | `tests/test_m5_outliers.py::test_priority_missing_over_range_over_outlier` |
 | TRAP-22 | 同一组重复行打乱顺序 | 代表行随顺序变化，导出结果不可复现 | 代表行取最小原始行号，组排序按代表行号 | `app/modules/m4_duplicates/groups.py`、`app/modules/m4_duplicates/hashdup.py` | `tests/test_m4_duplicates.py::test_order_independence_of_groups` |
 | TRAP-26 | 旧页面提交覆盖新结果 | 后提交无条件写入，新版本被旧数据顶掉 | 同名数据集版本自增，`expected_version` 落后即 409 | `app/modules/m6_score/runstore.py` | `tests/test_m6_score.py::test_stale_submission_rejected`、`tests/test_e2e.py::test_stale_version_conflict_over_http` |
+| TRAP-27 | 换样本后总分下降，现场说不清是字段变差还是新增工单拖累 | 只看共有工单会漏掉新增高缺失工单；直接比两批总分会把换样本误判成字段质量恶化；朴素地相减两个子集扣分又不闭合（各视图比率分母不同、封顶非线性） | 工单号配对共有/移除/新增，另建反事实批 X0（新质量共有＋旧批移除），扣分空间望远镜分解：质量效应 = P_X0−P_S0、覆盖效应 = P_S1−P_X0，Δ扣分恒等于两效应之和、残差 0.00；新增桶缺失率单独打 `K_ADDED_HIGH_MISSING` 旗标 | `app/modules/m8_compare/decompose.py`、`app/modules/m8_compare/matching.py` | `tests/test_m8_compare.py::test_effects_decompose_score_delta_with_zero_residual`、`tests/test_m8_compare.py::test_pure_coverage_change_has_zero_quality_effect` |
+| TRAP-28 | 同名数据集换版后原文被覆盖，旧运行无法按当时输入复核 | 对比时重采信拿到的是新字节，摘要对不上仍静默出数 | 每次评分按 run_id 在 `run_artifacts` 只插不留地存原文；对比只从该不可变原文重建，sha256 与运行记录不一致即拒绝（E_DIGEST_MISMATCH） | `app/store.py`、`app/modules/m8_compare/subset.py` | `tests/test_m8_compare.py::test_comparison_never_touches_runs_or_artifacts` |
+| TRAP-29 | 同一对批次反复对比产生多条版本、影响被重复累计 | 每次提交都新插一行，历史表数字越加越大 | 对比按 (run_id 无序对, 规则版本) 幂等，重跑命中同一 comparison_id 只刷新查看顺序；入参方向自动规范成旧批→新批 | `app/modules/m8_compare/service.py`、`app/store.py` | `tests/test_m8_compare.py::test_rerun_same_pair_is_idempotent`、`tests/test_m8_compare.py::test_reversed_inputs_canonicalize_to_same_record` |
 
 ## 对账规则
 
@@ -50,6 +54,21 @@
 | 单元格账 | 单元格 | 缺失 + 有值 | 510 = 14 + 496 |
 | 有值格账 | 有值 | 合格 + 格式不合格 | 496 = 494 + 2 |
 | 分数账 | 100 | 总分 + 扣分 | 100 = 65.24 + 34.76 |
+
+## M8 变化裁决口径
+
+- 配对键：工单号单元格的归一取值（M2 已 NFKC + strip）；缺失/格式不合格的工单号不配对，
+  计入 `*_unkeyed_rows`，守恒式「共有 + 仅本批 + 无键 = 采纳行」。
+- 七次同引擎重评（全部 Decimal、0.01 量化）：S0 旧批整批、S1 新批整批、C0/C1 共有工单、
+  R0 移除、A1 新增、X0 反事实批（新质量共有行 + 旧批移除行，行数与 S0 相同）。
+- 扣分空间恒等式（望远镜相消，无二次舍入）：
+  `ΔP = (P_X0 − P_S0) + (P_S1 − P_X0) = 字段质量效应 + 样本覆盖效应`，
+  分数空间取相反数，残差恒为 `0.00`；落库前断言 S0/S1 与运行记录总分逐位相同。
+- 裁决码：`V_QUALITY_DRIVEN` 字段质量主导 / `V_COVERAGE_DRIVEN` 样本覆盖主导 /
+  `V_BOTH_RISE` 双重恶化 / `V_STABLE` 基本持平（|效应| ≤ 0.01）/
+  `V_NO_OVERLAP` 无共有工单（质量效应留空，只给覆盖事实）。
+- 页面 `/compare` 与 `comparison.csv` / `comparison.json` 读同一条 comparisons 快照；
+  同对批次（无序 run_id 对 + 规则版本）重复提交返回同一 comparison_id。
 
 ## 反例与不变量
 
@@ -72,4 +91,7 @@
 - 权重、容忍度、等级阈值写在配置里，改完必须重新运行；不支持页面上调参。
 - 只处理 UTF-8 / GB18030 两类编码；UTF-16、Big5、Shift-JIS 会落到 `E_DECODE`。
 - 稳健离群只支持数值列；日期列不做离群判定，文本列只做基数与格式检查。
-- 缺失模式只看「同列连续缺失」，不做跨文件的缺失趋势对比。
+- 缺失模式只看「同列连续缺失」，不做跨文件的缺失趋势对比；跨批次的字段质量变化由 M8 的
+  字段质量效应在总分口径上裁决，不另做逐列趋势检验。
+- M8 只按工单号配对：工单号缺失/格式不合格的行进无键桶，不参与共有判定；
+  历史运行（M8 上线前）若没有 run_artifacts 原文，需重跑一次评分才能对比。

@@ -96,3 +96,25 @@
 
 完整清单见 `app/reasons.py`，前缀含义：`E_` 文件级失败（4xx，整批不落数据）、
 `Q_` 行级隔离（进隔离区，带行号与原值）、`K_` 标记（不进隔离区，只留证据）。
+
+## 10 批次对比（M8）
+
+- 配对键：`ticket_id` 的 M2 归一取值；工单号缺失或格式不合格的行进无键桶，不参与配对。
+- 七个重评视图（同一评分引擎，分数刻度 0.01）：
+
+| 视图键 | 含义 |
+|---|---|
+| `base_full` / `target_full` | 旧批 / 新批整批，得分与运行记录逐位相同 |
+| `base_common` / `target_common` | 两批共有工单分别在旧批、新批中的重评 |
+| `base_only` / `target_only` | 仅旧批（移除）/ 仅新批（新增）工单 |
+| `counterfactual` | 反事实批 X0：新批字段质量的共有行 + 旧批移除行，行数与旧批相同 |
+
+- 效应（扣分口径，正值拉低总分；分数口径取相反数）：
+  - 字段质量效应 `quality_effect = P_X0 − P_S0`
+  - 样本覆盖效应 `coverage_effect = P_S1 − P_X0`
+  - 恒等式 `ΔP = quality_effect + coverage_effect`，`closure_residual` 恒为 `0.00`。
+- 裁决码：`V_QUALITY_DRIVEN` / `V_COVERAGE_DRIVEN` / `V_BOTH_RISE` / `V_STABLE`
+  （阈值为一个计分刻度 0.01）/ `V_NO_OVERLAP`（无共有工单，质量效应为空）。
+- 新增高缺失旗标 `K_ADDED_HIGH_MISSING`：新增桶缺失率 − 共有桶缺失率 ≥ 0.0200。
+- 幂等键：(`run_id` 无序对, `rules_version`) 唯一，`comparison_id = QC-<sha256 前 12 位>`，
+  重跑不新增；每次评分另在 `run_artifacts` 按 run_id 只插不留地保存输入原文。

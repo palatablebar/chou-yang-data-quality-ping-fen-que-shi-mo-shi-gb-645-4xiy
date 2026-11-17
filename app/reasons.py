@@ -17,6 +17,12 @@ REASONS: dict[str, dict[str, str]] = {
     "E_RUN_NOT_FOUND": {"label": "运行记录不存在", "level": "error"},
     "E_STALE_RUN": {"label": "提交版本已过期", "level": "error"},
     "E_EMPTY_UPLOAD": {"label": "上传内容为空", "level": "error"},
+    "E_COMPARISON_NOT_FOUND": {"label": "对比记录不存在", "level": "error"},
+    "E_ARTIFACT_GONE": {"label": "运行原文未留存无法复核", "level": "error"},
+    "E_DIGEST_MISMATCH": {"label": "留存原文摘要与运行记录不一致", "level": "error"},
+    "E_REINGEST_MISMATCH": {"label": "重采信结果与运行记录不一致", "level": "error"},
+    "E_REPRODUCIBILITY": {"label": "子集重评无法复现运行总分", "level": "error"},
+    "E_DECOMPOSITION": {"label": "效应分解残差不为零", "level": "error"},
     "Q_COLUMN_COUNT": {"label": "列数与表头不一致", "level": "error"},
     "Q_TRUNCATED_ROW": {"label": "末行被截断", "level": "error"},
     "K_BLANK_ROW": {"label": "空行已跳过", "level": "info"},
@@ -38,6 +44,7 @@ REASONS: dict[str, dict[str, str]] = {
     "K_KEY_CONFLICT": {"label": "同键取值冲突", "level": "warn"},
     "K_CAPPED": {"label": "该维扣分已封顶", "level": "info"},
     "K_REPLAY": {"label": "同输入重跑复用", "level": "info"},
+    "K_ADDED_HIGH_MISSING": {"label": "新增工单缺失率显著偏高", "level": "warn"},
 }
 
 
